@@ -1,0 +1,5 @@
+{
+  "name": "MolecuView 3D",
+  "description": "Interactive 3D molecular visualization tool powered by PubChem and Gemini 2.5. Explore chemical structures and learn about their properties in real-time.",
+  "requestFramePermissions": []
+}
