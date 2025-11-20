@@ -14,6 +14,7 @@ export const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ data, loading })
   const [viewStyle, setViewStyle] = useState<ViewStyle>(ViewStyle.BallAndStick);
   const [spin, setSpin] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
   // Initialize Stage
   useEffect(() => {
@@ -22,18 +23,31 @@ export const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ data, loading })
     const stage = new NGL.Stage(containerRef.current, {
       backgroundColor: '#09090b', // Zinc 950
       tooltip: true,
+      // Improve rendering quality and reduce clipping artifacts
+      sampleLevel: 1, 
     });
     
     stageRef.current = stage;
 
-    const handleResize = () => stage.handleResize();
-    window.addEventListener('resize', handleResize);
+    // Use ResizeObserver for more robust resizing handling (handles flex layout changes)
+    resizeObserverRef.current = new ResizeObserver(() => {
+      stage.handleResize();
+    });
+    resizeObserverRef.current.observe(containerRef.current);
+
+    // Explicitly set mouse controls to ensure rotation works
+    // Default is usually fine, but this ensures it's set
+    stage.mouseControls.clear();
+    stage.mouseControls.add("drag-left", NGL.MouseActions.rotateDrag);
+    stage.mouseControls.add("drag-right", NGL.MouseActions.moveDrag);
+    stage.mouseControls.add("scroll-wheel", NGL.MouseActions.zoomScroll);
+    stage.mouseControls.add("click-pick-left", NGL.MouseActions.pick);
 
     return () => {
-      window.removeEventListener('resize', handleResize);
-      // Clean up stage is tricky in NGL without disposing context, usually safe to leave if component unmounts rarely
-      // but let's try to clear
+      resizeObserverRef.current?.disconnect();
+      // Clean up stage
       stage.removeAllComponents();
+      stage.dispose(); // Crucial to prevent context leaks
     };
   }, []);
 
@@ -55,10 +69,22 @@ export const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ data, loading })
         component.addRepresentation(viewStyle === ViewStyle.BallAndStick ? 'ball+stick' : viewStyle, {
             sele: '*', 
             colorScheme: 'element',
-            aspectRatio: viewStyle === 'licorice' ? 1.0 : undefined 
+            aspectRatio: viewStyle === 'licorice' ? 1.0 : undefined,
+            // Improve visual quality
+            quality: 'high'
         });
         
+        // Critical: Handle resize before autoView to ensure correct bounding box calculation
+        stage.handleResize();
+        
+        // Center and zoom
         component.autoView();
+
+        // Double check autoView after a microtask to handle any layout thrashing
+        setTimeout(() => {
+            stage.handleResize();
+            component.autoView();
+        }, 50);
         
         // Reset spin if enabled
         if (spin) {
@@ -78,15 +104,26 @@ export const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ data, loading })
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
-      containerRef.current?.requestFullscreen().then(() => setIsFullscreen(true));
+      containerRef.current?.requestFullscreen().then(() => {
+        setIsFullscreen(true);
+        // Need to resize stage after fullscreen transition
+        setTimeout(() => stageRef.current?.handleResize(), 100);
+      });
     } else {
-      document.exitFullscreen().then(() => setIsFullscreen(false));
+      document.exitFullscreen().then(() => {
+        setIsFullscreen(false);
+        setTimeout(() => stageRef.current?.handleResize(), 100);
+      });
     }
   };
   
   // Monitor fullscreen change from ESC key
   useEffect(() => {
-      const onFSChange = () => setIsFullscreen(!!document.fullscreenElement);
+      const onFSChange = () => {
+        setIsFullscreen(!!document.fullscreenElement);
+        // Ensure stage resizes correctly when exiting via ESC
+        setTimeout(() => stageRef.current?.handleResize(), 100);
+      };
       document.addEventListener('fullscreenchange', onFSChange);
       return () => document.removeEventListener('fullscreenchange', onFSChange);
   }, []);
@@ -94,7 +131,11 @@ export const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ data, loading })
   return (
     <div className="relative w-full h-full group bg-zinc-900/50 rounded-2xl overflow-hidden border border-zinc-800 shadow-2xl">
       {/* Canvas Container */}
-      <div ref={containerRef} className="w-full h-full absolute inset-0 z-0" />
+      <div 
+        ref={containerRef} 
+        className="w-full h-full absolute inset-0 z-0 cursor-move" 
+        style={{ touchAction: 'none' }} // Prevents page scroll on touch devices while interacting
+      />
 
       {/* Loading Overlay */}
       {loading && (
